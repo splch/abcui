@@ -4,13 +4,19 @@ import litellm, pypdf
 from nicegui import run, ui
 
 # Each model is any LiteLLM id; override them from the environment, e.g. MODELS=openai/gpt-5,ollama/llama3.2
-MODELS = os.getenv('MODELS', 'gemini/gemini-3.1-flash-lite,gemini/gemini-3.8-flash').split(',')
-EMBED = os.getenv('EMBED', 'gemini/gemini-embedding-001')
-IMAGE = os.getenv('IMAGE', 'gemini/gemini-3.1-flash-image')
-STT = os.getenv('STT', 'gemini/gemini-3.5-transcribe')
-TTS = os.getenv('TTS', 'gemini/gemini-3.1-flash-tts-preview')
-VOICE = os.getenv('VOICE', 'Kore')
-SEARCH = os.getenv('SEARCH', 'tavily')
+MODELS = os.getenv('MODELS', 'ollama_chat/alfred,ollama_chat/qwen3.8-abliterated:27b-nothink,'
+                   'ollama_chat/gemma4:e4b').split(',')
+EMBED = os.getenv('EMBED', 'ollama/embeddinggemma:300m')
+IMAGE = os.getenv('IMAGE', 'lm_studio/sd-cpp-local')
+STT = os.getenv('STT', 'hosted_vllm/Systran/faster-distil-whisper-large-v3')
+TTS = os.getenv('TTS', 'hosted_vllm/speaches-ai/Kokoro-82M-v1.0-ONNX')
+VOICE = os.getenv('VOICE', 'af_heart')
+SEARCH = os.getenv('SEARCH', 'searxng')
+# The ids above reach this server's OpenAI-compatible hosts through LiteLLM's hosted_vllm and lm_studio providers.
+os.environ.setdefault('HOSTED_VLLM_API_BASE', 'http://172.19.0.44:8000/v1')  # Speaches
+os.environ.setdefault('LM_STUDIO_API_BASE', 'http://192.168.1.2:7860/v1')  # stable-diffusion.cpp
+os.environ.setdefault('SEARXNG_API_BASE', 'http://127.0.0.1:8899')
+os.environ.setdefault('OPENAI_API_KEY', 'local')  # LiteLLM's OpenAI client demands a key; Speaches ignores it
 warnings.filterwarnings('ignore', 'Pydantic serializer warnings')  # LiteLLM re-serialises tool calls noisily
 
 # Runs in the browser when the mic button is clicked: the first click starts a recording, the second one stops it.
@@ -106,7 +112,7 @@ def root():
     ui.on_exception(lambda error: ui.notify(str(error)[:600], type='negative', multi_line=True))
 
     async def say(content):
-        speech = await litellm.aspeech(model=TTS, voice=VOICE, input=content)
+        speech = await litellm.aspeech(model=TTS, voice=VOICE, input=content, response_format='wav')
         ui.audio(f'data:audio/wav;base64,{base64.b64encode(speech.content).decode()}', autoplay=True)
 
     async def record():
