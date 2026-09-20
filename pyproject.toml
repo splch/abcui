@@ -1,0 +1,9 @@
+[project]
+name = "abc-llm-ui"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "litellm>=1.102.0",
+    "nicegui>=3.17.1",
+    "pypdf>=6.19.0",
+]
