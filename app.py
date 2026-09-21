@@ -18,6 +18,7 @@ os.environ.setdefault('HOSTED_VLLM_API_BASE', 'http://172.19.0.44:8000/v1')  # S
 os.environ.setdefault('LM_STUDIO_API_BASE', 'http://192.168.1.2:7860/v1')  # stable-diffusion.cpp
 os.environ.setdefault('SEARXNG_API_BASE', 'http://127.0.0.1:8899')
 os.environ.setdefault('OPENAI_API_KEY', 'local')  # LiteLLM's OpenAI client demands a key; Speaches ignores it
+os.environ.setdefault('PYTHONUTF8', '1')
 
 # Runs in the browser when the mic button is clicked: the first click starts a recording, the second one stops it.
 # The audio is re-encoded as 16 kHz WAV (a 44-byte RIFF header plus 16-bit samples), which speech-to-text APIs accept;
