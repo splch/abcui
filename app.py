@@ -139,7 +139,7 @@ def root():
                 ui.label(f'📎 {name}')
 
     async def send(speak=False):
-        if not text.value.strip():
+        if not text.value.strip() or any(isinstance(child, ui.spinner) for child in chat):
             return
         messages.append({'role': 'user', 'content': [{'type': 'text', 'text': text.value}, *parts]})
         with chat:
