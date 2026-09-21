@@ -6,7 +6,7 @@ It streams replies and reasoning from any LiteLLM model and gives the model four
 
 ## Run
 
-With [uv](https://docs.astral.sh/uv/) installed, on Linux (the Python tool runs under `setpriv` and `timeout`):
+With [uv](https://docs.astral.sh/uv/) installed:
 
 ```sh
 uv run app.py
@@ -24,4 +24,4 @@ OPENAI_API_KEY=... MODELS=openai/gpt-5,ollama/llama3.2 uv run app.py
 
 ## Security
 
-The Python tool runs model-written code with no sandbox, so the server listens only on localhost. If you tunnel or proxy it, anyone who reaches the URL can run code on your machine. So can a web page or file the model reads, if its text talks the model into it. Scripts cannot gain privileges, so `sudo` fails, but they can do whatever else your account can.
+The Python tool runs model-written code with no sandbox, so the server listens only on localhost. If you tunnel or proxy it, anyone who reaches the URL can run code on your machine. So can a web page or file the model reads, if its text talks the model into it. Scripts can do whatever your account can. On Linux they cannot gain privileges, so `sudo` fails; macOS and Windows have no such guard.

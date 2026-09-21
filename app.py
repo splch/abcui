@@ -1,4 +1,4 @@
-import asyncio, base64, inspect, io, json, math, os, subprocess, time
+import asyncio, base64, inspect, io, json, math, os, subprocess, sys, tempfile, time
 
 import litellm, pypdf
 from nicegui import app, ui
@@ -56,8 +56,9 @@ async def web_search(query: str):
 async def run_python(code: str):
     """Run a Python script and return its output. Declare dependencies as PEP 723 inline script metadata."""
     # uv reads the script from stdin and installs whatever it declares into a cached, throwaway environment
-    done = await asyncio.to_thread(subprocess.run, 'setpriv --no-new-privs timeout -v 120 uv run --quiet --no-project -'
-                                   .split(), input=code, capture_output=True, text=True, cwd='/tmp')
+    done = await asyncio.to_thread(subprocess.run, ('setpriv --no-new-privs ' * (sys.platform == 'linux')
+        + 'uv run --quiet --no-project -').split(), capture_output=True, encoding='utf-8', cwd=tempfile.gettempdir(),
+        timeout=180, input=f'import faulthandler; faulthandler.dump_traceback_later(120, exit=True)\n{code}')
     return (done.stdout + done.stderr)[-20000:]
 
 
