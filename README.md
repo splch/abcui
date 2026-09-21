@@ -24,4 +24,4 @@ OPENAI_API_KEY=... MODELS=openai/gpt-5,ollama/llama3.2 uv run app.py
 
 ## Security
 
-The Python tool runs model-written code with no sandbox, so the server listens only on localhost. If you tunnel or proxy it, anyone who reaches the URL can run code on your machine.
+The Python tool runs model-written code with no sandbox, so the server listens only on localhost. If you tunnel or proxy it, anyone who reaches the URL can run code on your machine. So can a web page or file the model reads, if its text talks the model into it.
