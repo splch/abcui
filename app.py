@@ -175,4 +175,4 @@ def root():
 
 
 # Bound to localhost because run_python executes model-written code on this machine.
-ui.run(root, title='ABC UI', host='127.0.0.1')
+ui.run(root, title='ABC UI', host='127.0.0.1', reconnect_timeout=3600)
