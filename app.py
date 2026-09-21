@@ -1,7 +1,7 @@
-import base64, inspect, io, json, math, os, subprocess, warnings
+import asyncio, base64, inspect, io, json, math, os, subprocess, time
 
 import litellm, pypdf
-from nicegui import run, ui
+from nicegui import app, run, ui
 
 # Each model is any LiteLLM id; override them from the environment, e.g. MODELS=openai/gpt-5,ollama/llama3.2
 MODELS = os.getenv('MODELS', 'ollama_chat/alfred,ollama_chat/qwen3.8-abliterated:27b-nothink,'
@@ -12,12 +12,12 @@ STT = os.getenv('STT', 'hosted_vllm/Systran/faster-distil-whisper-large-v3')
 TTS = os.getenv('TTS', 'hosted_vllm/speaches-ai/Kokoro-82M-v1.0-ONNX')
 VOICE = os.getenv('VOICE', 'af_heart')
 SEARCH = os.getenv('SEARCH', 'searxng')
+SYSTEM = os.getenv('SYSTEM', 'Today is %A, %d %B %Y.')
 # The ids above reach this server's OpenAI-compatible hosts through LiteLLM's hosted_vllm and lm_studio providers.
 os.environ.setdefault('HOSTED_VLLM_API_BASE', 'http://172.19.0.44:8000/v1')  # Speaches
 os.environ.setdefault('LM_STUDIO_API_BASE', 'http://192.168.1.2:7860/v1')  # stable-diffusion.cpp
 os.environ.setdefault('SEARXNG_API_BASE', 'http://127.0.0.1:8899')
 os.environ.setdefault('OPENAI_API_KEY', 'local')  # LiteLLM's OpenAI client demands a key; Speaches ignores it
-warnings.filterwarnings('ignore', 'Pydantic serializer warnings')  # LiteLLM re-serialises tool calls noisily
 
 # Runs in the browser when the mic button is clicked: the first click starts a recording, the second one stops it.
 # The audio is re-encoded as 16 kHz WAV (a 44-byte RIFF header plus 16-bit samples), which speech-to-text APIs accept;
@@ -36,7 +36,8 @@ const pcm = Int16Array.from(audio.getChannelData(0), sample => sample * 32767), 
 const header = [0x46464952, 36 + size, 0x45564157, 0x20746d66, 16, 0x10001, 16000, 32000, 0x100002, 0x61746164, size];
 getElement(%d).$refs.qRef.addFiles([new File([new Uint32Array(header), pcm], 'voice.wav', {type: 'audio/wav'})]);
 '''
-docs = []  # (chunk, embedding) pairs of every uploaded document
+chats = app.storage.general.setdefault('chats', {})
+docs = app.storage.general.setdefault('docs', [])
 
 
 async def embed(texts):
@@ -62,7 +63,7 @@ async def run_python(code: str):
 async def generate_image(prompt: str):
     """Generate an image from a text prompt and show it to the user."""
     image = (await litellm.aimage_generation(model=IMAGE, prompt=prompt)).data[0]
-    ui.image(image.url or f'data:image/png;base64,{image.b64_json}').classes('w-96')  # lands in the open chat bubble
+    app.storage.client['image'] = image.url or f'data:image/png;base64,{image.b64_json}'
     return 'The image was shown to the user.'
 
 
@@ -81,35 +82,48 @@ SPECS = [{'type': 'function', 'function': {'name': name, 'description': tool.__d
 
 
 async def call_tool(call):
-    args = json.loads(call.function.arguments)
+    args = json.loads(call['function']['arguments'])
     try:
-        result = str(await TOOLS[call.function.name](**args))
+        result = str(await TOOLS[call['function']['name']](**args))
     except Exception as error:  # reported to the model, which can then correct itself or explain
         result = f'Error: {error}'
-    with ui.expansion(call.function.name, icon='build').classes('w-full'):
-        ui.code('\n'.join(map(str, args.values())))
-        ui.code(result, language='text')
-    return {'role': 'tool', 'tool_call_id': call.id, 'content': result}
+    return {'role': 'tool', 'tool_call_id': call['id'], 'content': result, 'name': call['function']['name'],
+            'input': '\n'.join(map(str, args.values())), 'image': app.storage.client.pop('image', None)}
+
+
+def draw(message):
+    if message['role'] == 'tool':
+        with ui.expansion(message['name'], icon='build').classes('w-full'):
+            ui.code(message['input'])
+            ui.code(message['content'], language='text')
+        return message['image'] and ui.image(message['image']).classes('w-96')
+    with ui.expansion('Thinking', icon='psychology').classes('w-full') as expansion:
+        thinking = ui.markdown(message.get('reasoning_content', ''))
+    expansion.bind_visibility_from(thinking, 'content')
+    return thinking, ui.markdown(message.get('content', ''))
 
 
 async def respond(model, messages):
     tools = SPECS if litellm.supports_function_calling(model) else None
-    while True:  # stream a reply into the open chat bubble, run the tools it calls, repeat until it calls none
-        markdown, chunks = ui.markdown(), []
-        async for chunk in await litellm.acompletion(model=model, messages=messages, tools=tools, stream=True):
+    while messages[-1]['role'] != 'assistant':
+        (thinking, markdown), chunks = draw({'role': 'assistant'}), []
+        sent = [{k: v for k, v in m.items() if k not in {'model', 'name', 'input', 'image'}} for m in messages]
+        sent.insert(0, {'role': 'system', 'content': time.strftime(SYSTEM)})
+        async for chunk in await litellm.acompletion(model=model, messages=sent, tools=tools, stream=True):
             chunks.append(chunk)
             markdown.content += chunk.choices[0].delta.content or ''
+            thinking.content += getattr(chunk.choices[0].delta, 'reasoning_content', None) or ''
             ui.run_javascript('window.scrollTo(0, document.body.scrollHeight)')
-        reply = litellm.stream_chunk_builder(chunks).choices[0].message
-        messages.append(reply)
-        if not reply.tool_calls:
-            return reply.content
-        messages.extend([await call_tool(call) for call in reply.tool_calls])
+        messages.append(litellm.stream_chunk_builder(chunks).choices[0].message.model_dump(exclude_none=True))
+        for call in messages[-1].get('tool_calls', []):
+            messages.append(await call_tool(call))
+            draw(messages[-1])
 
 
 def root():
-    messages, parts = [], []  # the chat history and the attachments of the next message
+    key, parts = time.ctime(), []
     ui.on_exception(lambda error: ui.notify(str(error)[:600], type='negative', multi_line=True))
+    busy = lambda: any(isinstance(child, ui.button) for child in chat)
 
     async def say(content):
         speech = await litellm.aspeech(model=TTS, voice=VOICE, input=content, response_format='wav')
@@ -125,45 +139,82 @@ def root():
         if kind.startswith('audio/'):  # a recording is transcribed, sent, and answered aloud
             text.value = (await litellm.atranscription(model=STT, file=(name, data, kind))).text
             return await send(speak=True)
-        with chat, ui.chat_message(sent=True):
-            if kind.startswith('image/'):
-                url = f'data:{kind};base64,{base64.b64encode(data).decode()}'
-                parts.append({'type': 'image_url', 'image_url': {'url': url}})
-                ui.image(url).classes('w-64')
-            else:  # documents are split into overlapping chunks and embedded for search_files
-                content = ('\n'.join(page.extract_text() for page in pypdf.PdfReader(io.BytesIO(data)).pages)
-                           if kind == 'application/pdf' else data.decode(errors='ignore'))
-                chunks = [content[i:i + 1000] for i in range(0, len(content), 800)]
-                docs.extend(zip(chunks, await embed(chunks)))
-                parts.append({'type': 'text', 'text': f'[File "{name}" uploaded: read it with search_files]'})
-                ui.label(f'📎 {name}')
+        if kind.startswith('image/'):
+            url = f'data:{kind};base64,{base64.b64encode(data).decode()}'
+            parts.append({'type': 'image_url', 'image_url': {'url': url}})
+        else:
+            content = ('\n'.join(page.extract_text() for page in pypdf.PdfReader(io.BytesIO(data)).pages)
+                       if kind == 'application/pdf' else data.decode(errors='ignore'))
+            chunks = [content[i:i + 1000] for i in range(0, len(content), 800)]
+            docs.extend(zip(chunks, await embed(chunks)))
+            parts.append({'type': 'text', 'text': f'📎 {name} (uploaded: read it with search_files)'})
+        ui.notify(f'📎 {name}')
+
+    def show(index):
+        with chat, ui.chat_message(sent=True).classes('whitespace-pre-wrap'):
+            for part in chats[key][index]['content']:
+                ui.image(part['image_url']['url']).classes('w-64') if 'image_url' in part else ui.label(part['text'])
+        with chat, ui.chat_message(name=chats[key][index]['model']).props('bg-color=grey-2') as reply:
+            bubble = ui.column().classes('w-full')
+        answer = lambda: [child for child in bubble if isinstance(child, ui.markdown)][-1].content
+        with reply.add_slot('stamp'):
+            ui.button(icon='volume_up', on_click=lambda: say(answer())).props('flat dense')
+            ui.button(icon='content_copy', on_click=lambda: ui.clipboard.write(answer())).props('flat dense')
+            ui.button(icon='refresh', on_click=lambda: busy() or edit(index) or send()).props('flat dense')
+            ui.button(icon='edit', on_click=lambda: busy() or edit(index)).props('flat dense')
+        return bubble
+
+    def load(new=None):
+        nonlocal key
+        key, parts[:] = new or time.ctime(), []
+        chat.clear()
+        history.refresh()
+        for index, message in enumerate(chats.get(key, [])):
+            if message['role'] == 'user':
+                bubble = show(index)
+            else:
+                with bubble:
+                    draw(message)
+
+    def edit(index):
+        content = chats[key][index]['content']
+        del chats[key][index:]
+        load(key)
+        text.value, parts[:] = content[0]['text'], content[1:]
 
     async def send(speak=False):
-        if not text.value.strip() or any(isinstance(child, ui.spinner) for child in chat):
+        if not text.value.strip() or busy():
             return
-        messages.append({'role': 'user', 'content': [{'type': 'text', 'text': text.value}, *parts]})
-        with chat:
-            ui.chat_message(text.value, sent=True)
-            with ui.chat_message(name=model.value).props('bg-color=grey-2'):
-                bubble = ui.column().classes('w-full')  # Quasar would draw each direct child as a bubble of its own
-            spinner = ui.spinner('dots', size='lg')
+        messages = chats.setdefault(key, [])
+        messages.append(dict(role='user', model=model.value, content=[{'type': 'text', 'text': text.value}, *parts]))
+        history.refresh()
+        bubble = show(len(messages) - 1)
+        with chat, ui.button(icon='stop', on_click=asyncio.current_task().cancel).props('flat') as spinner:
+            ui.spinner('dots', size='lg')
         text.value = ''
         parts.clear()
         upload.reset()
         try:
             with bubble:
-                answer = await respond(model.value, messages)
-                ui.button(icon='volume_up', on_click=lambda: say(answer)).props('flat dense')
+                await respond(model.value, messages)
                 if speak:
-                    await say(answer)
+                    await say(messages[-1].get('content', ''))
         finally:
             spinner.delete()
 
-    with ui.header().classes('items-center justify-between'):
+    @ui.refreshable
+    def history():
+        for old in reversed([old for old in chats if chats[old]]):
+            ui.item(chats[old][0]['content'][0]['text'][:40], on_click=lambda old=old: busy() or load(old))
+
+    with ui.left_drawer().classes('bg-grey-2') as drawer, ui.list().classes('w-full'):
+        history()
+    with ui.header().classes('items-center'):
+        ui.button(icon='menu', on_click=drawer.toggle).props('flat round color=white')
         model = ui.select(MODELS, value=MODELS[0], with_input=True, new_value_mode='add-unique') \
-            .props('dense dark borderless').classes('w-80')
-        ui.button(icon='add', on_click=lambda: (messages.clear(), parts.clear(), chat.clear())) \
-            .props('flat round color=white')
+            .props('dense dark borderless').classes('w-80 mr-auto')
+        ui.button(icon='delete', on_click=lambda: busy() or (chats.pop(key, 0), load())).props('flat round color=white')
+        ui.button(icon='add', on_click=lambda: busy() or load()).props('flat round color=white')
     chat = ui.column().classes('w-full max-w-3xl mx-auto items-stretch')
     upload = ui.upload(multiple=True, auto_upload=True, on_upload=attach).classes('hidden')
     with ui.footer().classes('bg-white'), ui.row().classes('w-full max-w-3xl mx-auto no-wrap items-center'):
