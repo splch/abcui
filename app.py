@@ -36,6 +36,7 @@ const pcm = Int16Array.from(audio.getChannelData(0), sample => sample * 32767), 
 const header = [0x46464952, 36 + size, 0x45564157, 0x20746d66, 16, 0x10001, 16000, 32000, 0x100002, 0x61746164, size];
 getElement(%d).$refs.qRef.addFiles([new File([new Uint32Array(header), pcm], 'voice.wav', {type: 'audio/wav'})]);
 '''
+ASK = '() => confirm("Delete this message and all after it?") && emit()'
 chats = app.storage.general.setdefault('chats', {})
 docs, running = app.storage.general.setdefault(f'docs {EMBED}', {}), {}
 
@@ -48,22 +49,23 @@ async def embed(texts):
 
 async def web_search(query: str):
     """Search the web for current information."""
-    results = (await litellm.asearch(query=query, search_provider=SEARCH, max_results=5)).results
+    results = (await litellm.asearch(query=query, search_provider=SEARCH, max_results=5)).results[:5]
     return '\n\n'.join(f'{result.title}\n{result.url}\n{result.snippet}' for result in results)
 
 
 async def run_python(code: str):
     """Run a Python script and return its output. Declare dependencies as PEP 723 inline script metadata."""
     # uv reads the script from stdin and installs whatever it declares into a cached, throwaway environment
-    done = await asyncio.to_thread(subprocess.run, 'timeout -v 120 uv run --quiet --no-project -'.split(), input=code,
-                                   capture_output=True, text=True, cwd='/tmp')
+    done = await asyncio.to_thread(subprocess.run, 'setpriv --no-new-privs timeout -v 120 uv run --quiet --no-project -'
+                                   .split(), input=code, capture_output=True, text=True, cwd='/tmp')
     return (done.stdout + done.stderr)[-20000:]
 
 
 async def generate_image(prompt: str):
     """Generate an image from a text prompt and show it to the user."""
     image = (await litellm.aimage_generation(model=IMAGE, prompt=prompt)).data[0]
-    app.storage.client['image'] = image.url or f'data:image/png;base64,{image.b64_json}'
+    app.storage.client['image'] = image.url or (path := f'.nicegui/{time.time()}.png')
+    image.url or open(path, 'wb').write(base64.b64decode(image.b64_json))
     return 'The image was shown to the user.'
 
 
@@ -112,7 +114,7 @@ async def respond(model, messages):
             chunks.append(chunk)
             markdown.content += chunk.choices[0].delta.content or ''
             thinking.content += getattr(chunk.choices[0].delta, 'reasoning_content', None) or ''
-            ui.run_javascript('window.scrollTo(0, document.body.scrollHeight)')
+            ui.run_javascript('scrollY + 2 * innerHeight > document.body.scrollHeight && scrollTo(0, 1e9)')
         turn = [litellm.stream_chunk_builder(chunks).choices[0].message.model_dump(exclude_none=True)]
         for call in turn[0].get('tool_calls', []):
             turn.append(await call_tool(call)) or draw(turn[-1])
@@ -125,8 +127,8 @@ def root():
     busy = lambda: key in running
 
     async def say(content):
-        speech = await litellm.aspeech(model=TTS, voice=VOICE, input=content, response_format='wav')
-        ui.audio(f'data:audio/wav;base64,{base64.b64encode(speech.content).decode()}', autoplay=True)
+        speech = await litellm.aspeech(model=TTS, voice=VOICE, input=content, response_format='mp3')
+        ui.audio(f'data:audio/mpeg;base64,{base64.b64encode(speech.content).decode()}', autoplay=True)
 
     async def record():
         mic.props('color=red')
@@ -159,8 +161,9 @@ def root():
         with reply.add_slot('stamp'):
             ui.button(icon='volume_up', on_click=lambda: say(answer())).props('flat dense')
             ui.button(icon='content_copy', on_click=lambda: ui.clipboard.write(answer())).props('flat dense')
-            ui.button(icon='refresh', on_click=lambda: busy() or edit(index) or send()).props('flat dense')
-            ui.button(icon='edit', on_click=lambda: busy() or edit(index)).props('flat dense')
+            ui.button(icon='refresh').props('flat dense') \
+                .on('click', lambda: busy() or edit(index) or send(), js_handler=ASK)
+            ui.button(icon='edit').props('flat dense').on('click', lambda: busy() or edit(index), js_handler=ASK)
         return bubble
 
     def load(new=None):
@@ -191,6 +194,7 @@ def root():
         bubble = show(len(messages) - 1)
         with chat, ui.button(icon='stop', on_click=asyncio.current_task().cancel).props('flat') as running[key]:
             ui.spinner('dots', size='lg')
+            ui.run_javascript('scrollTo(0, 1e9)')
         text.value, parts[:] = '', []
         upload.reset()
         with bubble:
