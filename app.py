@@ -3,20 +3,16 @@ import asyncio, base64, inspect, io, json, math, os, subprocess, sys, tempfile, 
 import litellm, pypdf
 from nicegui import app, ui
 
-# Each model is any LiteLLM id; override them from the environment, e.g. MODELS=openai/gpt-5,ollama/llama3.2
-MODELS = os.getenv('MODELS', 'ollama_chat/alfred,ollama_chat/qwen3.8-abliterated:27b-nothink,'
-                   'ollama_chat/gemma4:e4b').split(',')
-EMBED = os.getenv('EMBED', 'ollama/embeddinggemma:300m')
-IMAGE = os.getenv('IMAGE', 'lm_studio/sd-cpp-local')
-STT = os.getenv('STT', 'hosted_vllm/Systran/faster-distil-whisper-large-v3')
-TTS = os.getenv('TTS', 'hosted_vllm/speaches-ai/Kokoro-82M-v1.0-ONNX')
-VOICE = os.getenv('VOICE', 'af_heart')
-SEARCH = os.getenv('SEARCH', 'searxng')
-SYSTEM = os.getenv('SYSTEM', 'Today is %A, %d %B %Y.')
-# The ids above reach this server's OpenAI-compatible hosts through LiteLLM's hosted_vllm and lm_studio providers.
-os.environ.setdefault('HOSTED_VLLM_API_BASE', 'http://172.19.0.44:8000/v1')  # Speaches
-os.environ.setdefault('LM_STUDIO_API_BASE', 'http://192.168.1.2:7860/v1')  # stable-diffusion.cpp
-os.environ.setdefault('SEARXNG_API_BASE', 'http://127.0.0.1:8899')
+# Each model is any LiteLLM id. The settings dialog edits and saves these; environment variables override them at start.
+env = app.storage.general.setdefault('settings', {})
+env.on_change(lambda: os.environ.update(env))  # LiteLLM reads the addresses from the environment at each call
+env.update({name: os.getenv(name, env.get(name, default)) for name, default in dict(
+    MODELS='ollama_chat/alfred,ollama_chat/qwen3.8-abliterated:27b-nothink,ollama_chat/gemma4:e4b',
+    EMBED='ollama/embeddinggemma:300m', IMAGE='lm_studio/sd-cpp-local', SYSTEM='Today is %A, %d %B %Y.',
+    STT='hosted_vllm/Systran/faster-distil-whisper-large-v3', TTS='hosted_vllm/speaches-ai/Kokoro-82M-v1.0-ONNX',
+    VOICE='af_heart', SEARCH='searxng', SEARXNG_API_BASE='http://127.0.0.1:8899',
+    # LiteLLM's hosted_vllm and lm_studio providers read the addresses of Speaches and stable-diffusion.cpp from these
+    HOSTED_VLLM_API_BASE='http://172.19.0.44:8000/v1', LM_STUDIO_API_BASE='http://192.168.1.2:7860/v1').items()})
 os.environ.setdefault('OPENAI_API_KEY', 'local')  # LiteLLM's OpenAI client demands a key; Speaches ignores it
 os.environ.setdefault('PYTHONUTF8', '1')
 
@@ -39,18 +35,18 @@ getElement(%d).$refs.qRef.addFiles([new File([new Uint32Array(header), pcm], 'vo
 '''
 ASK = '() => confirm("Delete this message and all after it?") && emit()'
 chats = app.storage.general.setdefault('chats', {})
-docs, running = app.storage.general.setdefault(f'docs {EMBED}', {}), {}
+docs, running = lambda: app.storage.general.setdefault(f"docs {env['EMBED']}", {}), {}
 
 
 async def embed(texts):
     # batches of 100, the most that Gemini accepts per request
-    batches = [await litellm.aembedding(model=EMBED, input=texts[i:i + 100]) for i in range(0, len(texts), 100)]
+    batches = [await litellm.aembedding(model=env['EMBED'], input=texts[i:i + 100]) for i in range(0, len(texts), 100)]
     return [item['embedding'] for batch in batches for item in batch.data]
 
 
 async def web_search(query: str):
     """Search the web for current information."""
-    results = (await litellm.asearch(query=query, search_provider=SEARCH, max_results=5)).results[:5]
+    results = (await litellm.asearch(query=query, search_provider=env['SEARCH'], max_results=5)).results[:5]
     return '\n\n'.join(f'{result.title}\n{result.url}\n{result.snippet}' for result in results)
 
 
@@ -65,7 +61,7 @@ async def run_python(code: str):
 
 async def generate_image(prompt: str):
     """Generate an image from a text prompt and show it to the user."""
-    image = (await litellm.aimage_generation(model=IMAGE, prompt=prompt)).data[0]
+    image = (await litellm.aimage_generation(model=env['IMAGE'], prompt=prompt)).data[0]
     app.storage.client['image'] = image.url or (path := f'.nicegui/{time.time()}.png')
     image.url or open(path, 'wb').write(base64.b64decode(image.b64_json))
     return 'The image was shown to the user.'
@@ -73,7 +69,7 @@ async def generate_image(prompt: str):
 
 async def search_files(query: str):
     """Search the user's uploaded files for relevant passages."""
-    q, files = (await embed([query]))[0], sum(docs.values(), [])
+    q, files = (await embed([query]))[0], sum(docs().values(), [])
     score = lambda doc: sum(a * b for a, b in zip(q, doc[1])) / (math.hypot(*q) * math.hypot(*doc[1]))  # cosine
     return '\n---\n'.join(chunk for chunk, _ in sorted(files, key=score, reverse=True)[:5]) or 'No files found.'
 
@@ -111,7 +107,7 @@ async def respond(model, messages):
     while messages[-1]['role'] != 'assistant':
         (thinking, markdown), chunks = draw({'role': 'assistant'}), []
         sent = [{k: v for k, v in m.items() if k not in {'model', 'name', 'input', 'image'}} for m in messages]
-        SYSTEM and sent.insert(0, {'role': 'system', 'content': time.strftime(SYSTEM)})
+        env['SYSTEM'] and sent.insert(0, {'role': 'system', 'content': time.strftime(env['SYSTEM'])})
         async for chunk in await litellm.acompletion(model=model, messages=sent, tools=tools, stream=True):
             chunks.append(chunk)
             markdown.content += chunk.choices[0].delta.content or ''
@@ -129,7 +125,7 @@ def root():
     busy = lambda: key in running
 
     async def say(content):
-        speech = await litellm.aspeech(model=TTS, voice=VOICE, input=content, response_format='mp3')
+        speech = await litellm.aspeech(model=env['TTS'], voice=env['VOICE'], input=content, response_format='mp3')
         ui.audio(f'data:audio/mpeg;base64,{base64.b64encode(speech.content).decode()}', autoplay=True)
 
     async def record():
@@ -140,7 +136,7 @@ def root():
     async def attach(event):
         data, kind, name = await event.file.read(), event.file.content_type, event.file.name
         if kind.startswith('audio/'):  # a recording is transcribed, sent, and answered aloud
-            text.value = (await litellm.atranscription(model=STT, file=(name, data, kind))).text
+            text.value = (await litellm.atranscription(model=env['STT'], file=(name, data, kind))).text
             return await send(speak=True)
         if kind.startswith('image/'):
             url = f'data:{kind};base64,{base64.b64encode(data).decode()}'
@@ -149,7 +145,7 @@ def root():
             content = ('\n'.join(page.extract_text() for page in pypdf.PdfReader(io.BytesIO(data)).pages)
                        if kind == 'application/pdf' else data.decode(errors='ignore'))
             chunks = [content[i:i + 1000] for i in range(0, len(content), 800)]
-            docs.setdefault(key, []).extend(zip(chunks, await embed(chunks)))
+            docs().setdefault(key, []).extend(zip(chunks, await embed(chunks)))
             parts.append({'type': 'text', 'text': f'📎 {name} (uploaded: read it with search_files)'})
         ui.notify(f'📎 {name}')
 
@@ -215,13 +211,18 @@ def root():
 
     with ui.left_drawer().classes('bg-grey-2') as drawer, ui.list().classes('w-full'):
         history()
+    with ui.dialog() as dialog, ui.card().classes('w-full'):  # edits save at once; the header follows MODELS
+        for name in env:
+            ui.input(name).bind_value(env, name).classes('w-full')
     with ui.header().classes('items-center'):
         ui.button(icon='menu', on_click=drawer.toggle).props('flat round color=white')
-        model = ui.select(MODELS, value=MODELS[0], with_input=True, new_value_mode='add-unique') \
-            .props('dense dark borderless').classes('w-80 mr-auto')
-        ui.button(icon='delete', on_click=lambda: busy() or (chats.pop(key, 0), docs.pop(key, 0), load())) \
+        model = ui.select(models := env['MODELS'].split(','), value=models[0], with_input=True,
+                          new_value_mode='add-unique').props('dense dark borderless').classes('w-80 mr-auto')
+        ui.button(icon='delete', on_click=lambda: busy() or (chats.pop(key, 0), docs().pop(key, 0), load())) \
             .props('flat round color=white')
         ui.button(icon='add', on_click=lambda: busy() or load()).props('flat round color=white')
+        ui.button(icon='settings', on_click=dialog.open).props('flat round color=white')
+    dialog.on_value_change(lambda: model.set_options(list(dict.fromkeys([*env['MODELS'].split(','), model.value]))))
     chat = ui.column().classes('w-full max-w-3xl mx-auto items-stretch')
     upload = ui.upload(multiple=True, auto_upload=True, on_upload=attach).classes('hidden')
     with ui.footer().classes('bg-white'), ui.row().classes('w-full max-w-3xl mx-auto no-wrap items-center'):

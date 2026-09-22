@@ -42,10 +42,14 @@ async def main():
         await user.should_see(REPLY, retries=600)
         chat, = app.storage.general['chats'].values()
         assert [message['role'] for message in chat] == ['user', 'assistant', 'tool', 'assistant'], chat
+        user.find(kind=ui.button, content='settings').click()
+        user.find(kind=ui.input, content='SYSTEM').type(' Be brief.')
+        assert app.storage.general['settings']['SYSTEM'] == os.environ['SYSTEM'] != 'Today is %A, %d %B %Y.'
         await user.open('/')
         user.find(ui.item).click()
         await user.should_see(REPLY)
         await user.should_see('Let me compute.')
+        await user.should_see('Be brief.')  # the saved setting fills a new page's dialog
 
 
 asyncio.run(main())
