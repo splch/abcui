@@ -1,20 +1,15 @@
-import asyncio, base64, inspect, io, json, math, os, subprocess, sys, tempfile, time
+import ast, asyncio, base64, contextlib, inspect, io, json, math, os, time, traceback
 
 import litellm, pypdf
 from nicegui import app, ui
 
 # Each model is any LiteLLM id. The settings dialog edits and saves these; environment variables override them at start.
 env = app.storage.general.setdefault('settings', {})
-env.on_change(lambda: os.environ.update(env))  # LiteLLM reads the addresses from the environment at each call
+env.on_change(lambda: os.environ.update(env))  # LiteLLM reads the keys from the environment at each call
 env.update({name: os.getenv(name, env.get(name, default)) for name, default in dict(
-    MODELS='llamafile/alfred,ollama_chat/gemma4:e4b', LLAMAFILE_API_BASE='http://127.0.0.1:8090/v1',
-    EMBED='ollama/embeddinggemma:300m', IMAGE='lm_studio/sd-cpp-local', SYSTEM='Today is %A, %d %B %Y.',
-    STT='hosted_vllm/Systran/faster-distil-whisper-large-v3', TTS='hosted_vllm/speaches-ai/Kokoro-82M-v1.0-ONNX',
-    VOICE='af_heart', SEARCH='searxng', SEARXNG_API_BASE='http://127.0.0.1:8899',
-    # LiteLLM's hosted_vllm and lm_studio providers read the addresses of Speaches and stable-diffusion.cpp from these
-    HOSTED_VLLM_API_BASE='http://172.19.0.34:8000/v1', LM_STUDIO_API_BASE='http://192.168.1.2:7860/v1').items()})
-os.environ.setdefault('OPENAI_API_KEY', 'local')  # LiteLLM's OpenAI client demands a key; Speaches ignores it
-os.environ.setdefault('PYTHONUTF8', '1')
+    MODELS='gemini/gemini-flash-latest,gemini/gemini-flash-lite-latest', GEMINI_API_KEY='', TAVILY_API_KEY='',
+    EMBED='gemini/gemini-embedding-2', IMAGE='gemini/gemini-3.1-flash-image', STT='gemini/gemini-3.5-transcribe',
+    TTS='gemini/gemini-3.1-flash-tts-preview', VOICE='Kore', SEARCH='tavily', SYSTEM='Today is %A, %d %B %Y.').items()})
 
 # Runs in the browser when the mic button is clicked: the first click starts a recording, the second one stops it.
 # The audio is re-encoded as 16 kHz WAV (a 44-byte RIFF header plus 16-bit samples), which speech-to-text APIs accept;
@@ -51,12 +46,14 @@ async def web_search(query: str):
 
 
 async def run_python(code: str):
-    """Run a Python script and return its output. Declare dependencies as PEP 723 inline script metadata."""
-    # uv reads the script from stdin and installs whatever it declares into a cached, throwaway environment
-    done = await asyncio.to_thread(subprocess.run, ('setpriv --no-new-privs ' * (sys.platform == 'linux')
-        + 'uv run --quiet --no-project -').split(), capture_output=True, encoding='utf-8', cwd=tempfile.gettempdir(),
-        timeout=180, input=f'import faulthandler; faulthandler.dump_traceback_later(120, exit=True)\n{code}')
-    return (done.stdout + done.stderr)[-20000:]
+    """Run a Python script in the browser and return its output. It may await micropip.install(...) for packages."""
+    with contextlib.redirect_stdout(out := io.StringIO()), contextlib.redirect_stderr(out):
+        try:
+            code = eval(compile(code, 'script.py', 'exec', ast.PyCF_ALLOW_TOP_LEVEL_AWAIT), {'__name__': '__main__'})
+            await code if inspect.iscoroutine(code) else None
+        except Exception:
+            traceback.print_exc()
+    return out.getvalue()[-20000:]
 
 
 async def generate_image(prompt: str):
@@ -125,8 +122,8 @@ def root():
     busy = lambda: key in running
 
     async def say(content):
-        speech = await litellm.aspeech(model=env['TTS'], voice=env['VOICE'], input=content, response_format='mp3')
-        ui.audio(f'data:audio/mpeg;base64,{base64.b64encode(speech.content).decode()}', autoplay=True)
+        speech = await litellm.aspeech(model=env['TTS'], voice=env['VOICE'], input=content, response_format='wav')
+        ui.audio(f'data:audio/wav;base64,{base64.b64encode(speech.content).decode()}', autoplay=True)
 
     async def record():
         mic.props('color=red')
