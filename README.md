@@ -16,7 +16,7 @@ The app opens at http://127.0.0.1:8080.
 
 ## Configure
 
-The defaults expect four local servers and need no API keys: Ollama for chat and embeddings, Speaches for speech, stable-diffusion.cpp for images, and SearXNG for search. To change them, open the settings behind the gear icon; each edit saves to `.nicegui/` at once. An environment variable of the same name overrides a saved setting when the app starts: `MODELS` (comma-separated), `EMBED`, `IMAGE`, `STT`, and `TTS` take any LiteLLM model id; `VOICE` names the speaking voice, `SEARCH` names the search provider, `SYSTEM` is the system prompt, whose `strftime` codes become today's date, and the `*_API_BASE` settings are the servers' addresses. API keys stay in the environment. The defaults sit at the top of `app.py`.
+The defaults expect five local servers and need no API keys: llama.cpp for chat, Ollama for chat and embeddings, Speaches for speech, stable-diffusion.cpp for images, and SearXNG for search. To change them, open the settings behind the gear icon; each edit saves to `.nicegui/` at once. An environment variable of the same name overrides a saved setting when the app starts: `MODELS` (comma-separated), `EMBED`, `IMAGE`, `STT`, and `TTS` take any LiteLLM model id; `VOICE` names the speaking voice, `SEARCH` names the search provider, `SYSTEM` is the system prompt, whose `strftime` codes become today's date, and the `*_API_BASE` settings are the servers' addresses. API keys stay in the environment. The defaults sit at the top of `app.py`.
 
 ```sh
 OPENAI_API_KEY=... MODELS=openai/gpt-5,ollama/llama3.2 uv run app.py

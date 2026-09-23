@@ -7,12 +7,12 @@ from nicegui import app, ui
 env = app.storage.general.setdefault('settings', {})
 env.on_change(lambda: os.environ.update(env))  # LiteLLM reads the addresses from the environment at each call
 env.update({name: os.getenv(name, env.get(name, default)) for name, default in dict(
-    MODELS='ollama_chat/alfred,ollama_chat/qwen3.8-abliterated:27b-nothink,ollama_chat/gemma4:e4b',
+    MODELS='llamafile/alfred,ollama_chat/gemma4:e4b', LLAMAFILE_API_BASE='http://127.0.0.1:8090/v1',
     EMBED='ollama/embeddinggemma:300m', IMAGE='lm_studio/sd-cpp-local', SYSTEM='Today is %A, %d %B %Y.',
     STT='hosted_vllm/Systran/faster-distil-whisper-large-v3', TTS='hosted_vllm/speaches-ai/Kokoro-82M-v1.0-ONNX',
     VOICE='af_heart', SEARCH='searxng', SEARXNG_API_BASE='http://127.0.0.1:8899',
     # LiteLLM's hosted_vllm and lm_studio providers read the addresses of Speaches and stable-diffusion.cpp from these
-    HOSTED_VLLM_API_BASE='http://172.19.0.44:8000/v1', LM_STUDIO_API_BASE='http://192.168.1.2:7860/v1').items()})
+    HOSTED_VLLM_API_BASE='http://172.19.0.34:8000/v1', LM_STUDIO_API_BASE='http://192.168.1.2:7860/v1').items()})
 os.environ.setdefault('OPENAI_API_KEY', 'local')  # LiteLLM's OpenAI client demands a key; Speaches ignores it
 os.environ.setdefault('PYTHONUTF8', '1')
 
@@ -103,7 +103,7 @@ def draw(message):
 
 
 async def respond(model, messages):
-    tools = SPECS if await asyncio.to_thread(litellm.supports_function_calling, model) else None
+    tools = SPECS if 'llamafile' in model or await asyncio.to_thread(litellm.supports_function_calling, model) else None
     while messages[-1]['role'] != 'assistant':
         (thinking, markdown), chunks = draw({'role': 'assistant'}), []
         sent = [{k: v for k, v in m.items() if k not in {'model', 'name', 'input', 'image'}} for m in messages]
